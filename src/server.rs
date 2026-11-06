@@ -138,13 +138,6 @@ fn parse_summary(s: &str) -> Option<(usize, usize)> {
 
 /// For requests made while typing: if the line under the cursor is what breaks
 /// the parse, analyse the document without that line.
-fn typing_view(doc: Arc<FileData>, offset: usize) -> Arc<FileData> {
-    match doc.without_line(doc.index.line_of(offset)) {
-        Some(view) => Arc::new(view),
-        None => doc,
-    }
-}
-
 fn uri_arg(args: &[Value], i: usize) -> Option<Url> {
     args.get(i).and_then(Value::as_str).and_then(|s| Url::parse(s).ok())
 }
@@ -550,7 +543,7 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 })),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".".into()]),
+                    trigger_characters: Some(vec![".".into(), "(".into(), ",".into()]),
                     ..Default::default()
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -669,7 +662,12 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let tdp = params.text_document_position;
         let Some((doc, offset)) = self.doc_and_offset(&tdp.text_document.uri, tdp.position) else { return Ok(None) };
-        let doc = typing_view(doc, offset);
+        // `(` and `,` only open the list inside a datatype update, not on every call.
+        let trigger = params.context.and_then(|c| c.trigger_character);
+        if matches!(trigger.as_deref(), Some("(" | ",")) && !completion::at_update_field(&doc, offset) {
+            return Ok(None);
+        }
+        let doc = completion::typing_view(doc, offset);
         let snippets = self.inner.caps.read().unwrap().snippets;
         let items = self.blocking(move |st| completion::complete(st, &doc, offset, snippets)).await?;
         Ok(Some(CompletionResponse::Array(items)))
@@ -696,7 +694,7 @@ impl LanguageServer for Backend {
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let tdp = params.text_document_position_params;
         let Some((doc, offset)) = self.doc_and_offset(&tdp.text_document.uri, tdp.position) else { return Ok(None) };
-        let doc = typing_view(doc, offset);
+        let doc = completion::typing_view(doc, offset);
         self.blocking(move |st| info::signature_help(st, &doc, offset)).await
     }
 

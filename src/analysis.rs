@@ -841,6 +841,8 @@ pub fn classify(st: &State, t: &Target) -> Val {
             }
             let Some(init) = &local.init else { return Val::Unknown };
             let Some(node) = find_node_with_range(file.root(), &init.range) else { return Val::Unknown };
+            // The lookup gives the innermost node, which for `var w := v` is a bare identifier.
+            let node = ancestors(node).take_while(|n| n.byte_range() == init.range).last().unwrap_or(node);
             // `var a, b := M();` takes the matching out parameter.
             if init.index > 0 {
                 if let Some(call) = as_call(unwrap_expr(node)) {
@@ -1298,6 +1300,12 @@ pub fn chain_before(src: &str, end: usize) -> Vec<Seg> {
                     }
                 }
             }
+            // Datatype update `d.(f := x)` keeps the type.
+            let head = src[..j].trim_end();
+            if c == b')' && head.ends_with('.') && !head.ends_with("..") {
+                i = src[..head.len() - 1].trim_end().len();
+                continue;
+            }
             segs.push(if c == b')' { Seg::Call } else { Seg::Index });
             i = j;
         } else if is_ident_byte(c) {
@@ -1306,9 +1314,10 @@ pub fn chain_before(src: &str, end: usize) -> Vec<Seg> {
                 j -= 1;
             }
             segs.push(Seg::Name(src[j..i].to_string()));
-            i = j;
-            if i > 0 && b[i - 1] == b'.' && !(i > 1 && b[i - 2] == b'.') {
-                i -= 1;
+            // The dot can have whitespace around it, as in a chain split across lines.
+            let head = src[..j].trim_end();
+            if head.ends_with('.') && !head.ends_with("..") {
+                i = src[..head.len() - 1].trim_end().len();
             } else {
                 break;
             }
@@ -1689,6 +1698,10 @@ module B {
         );
         assert_eq!(chain_before("s[1..n]", 7), vec![Seg::Name("s".into()), Seg::Index]);
         assert!(chain_before("3", 1).is_empty());
+        assert_eq!(chain_before("a.b.(c := f(1)).d", 17), vec![Seg::Name("a".into()), Seg::Name("b".into()), Seg::Name("d".into())]);
+        assert_eq!(chain_before("a\n  .(c := 1)\n  .(d := 2)", 25), vec![Seg::Name("a".into())]);
+        assert_eq!(chain_before("a\n  .b()\n  . c", 14), vec![Seg::Name("a".into()), Seg::Name("b".into()), Seg::Call, Seg::Name("c".into())]);
+        assert_eq!(chain_before("x\n  y", 5), vec![Seg::Name("y".into())]);
         assert_eq!(type_args("map<int, seq<T>>"), vec!["int", "seq<T>"]);
     }
 }

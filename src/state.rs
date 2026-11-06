@@ -94,6 +94,28 @@ impl FileData {
         copy.adopt(syntax::parse(&blanked, None)).then_some(copy)
     }
 
+    /// A copy of this file with `range` replaced by `new`, if that makes it parse
+    /// cleanly. Reparses incrementally, because callers try several replacements.
+    pub fn with_replacement(&self, range: Range<usize>, new: &str) -> Option<FileData> {
+        let mut text = self.text.clone();
+        text.replace_range(range.clone(), new);
+        let start_position = self.index.point(range.start);
+        let mut old = self.raw_tree.clone();
+        old.edit(&InputEdit {
+            start_byte: range.start,
+            old_end_byte: range.end,
+            new_end_byte: range.start + new.len(),
+            start_position,
+            old_end_position: self.index.point(range.end),
+            new_end_position: point_after(start_position, new),
+        });
+        let tree = syntax::parse(&text, Some(&old));
+        if tree.root_node().has_error() {
+            return None;
+        }
+        Some(FileData::new(self.uri.clone(), self.version, text, Some(&tree), self.mtime))
+    }
+
     pub fn pos(&self, offset: usize, enc: Encoding) -> lsp::Position {
         self.index.position(&self.text, offset, enc)
     }

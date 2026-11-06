@@ -203,6 +203,36 @@ mod tests {
     }
 
     #[test]
+    fn signature_when_the_declaration_is_on_one_line() {
+        // T also has an Add, so an unresolved receiver would show both signatures.
+        let decls = "datatype T = T { function Add(z: string): int { 0 } }\ndatatype S = S(a: int) { function Add(k: int, j: int): int { k } }\n";
+        for (line, active) in [
+            ("function F(s: S): int { s.Add(<|> }", 0),
+            ("function F(s: S): int { s.Add(<|>) }", 0),
+            ("function F(s: S): int { s.Add(1<|> }", 0),
+            ("function F(s: S, n: int): int { s.Add(n<|> }", 0),
+            ("function F(s: S): int { s.Add(1, <|> }", 1),
+            ("function F(s: S): int { s.Add(1, <|>) }", 1),
+            ("function F(s: S): int { var w := s; w.Add(<|> }", 0),
+            ("function F(s: S): int requires s.Add(<|> { 0 }", 0),
+            ("method M(s: S) { var a := s.Add(<|> }", 0),
+            ("method M(s: S) { var a := s.Add(1, <|>; }", 1),
+            ("method M(s: S) { s\n  .Add(<|> }", 0),
+        ] {
+            let st = State::default();
+            let offset = decls.len() + line.find("<|>").unwrap();
+            let src = format!("{decls}{}", line.replace("<|>", ""));
+            let uri = Url::parse("file:///ws/s.dfy").unwrap();
+            let doc = st.put_doc(FileData::new(uri, Some(1), src, None, None));
+            let view = crate::completion::typing_view(doc, offset);
+            let help = signature_help(&st, &view, offset).unwrap_or_else(|| panic!("no help: {line}"));
+            let got: Vec<&str> = help.signatures.iter().map(|s| s.label.as_str()).collect();
+            assert_eq!(got, ["Add(k: int, j: int): int"], "{line}");
+            assert_eq!(help.active_parameter, Some(active), "{line}");
+        }
+    }
+
+    #[test]
     fn finds_enclosing_call() {
         assert_eq!(enclosing_call("f(a, g(b, c), ", 14), Some((1, 2)));
         assert_eq!(enclosing_call("x := y;", 7), None);
